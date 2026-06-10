@@ -33,7 +33,9 @@ const DATE_FIELDS = [
 function isValidDateFormat(dateStr) {
   if (typeof dateStr !== 'string') return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
-  return dayjs(dateStr, DATE_FORMAT, true).isValid();
+  if (!dayjs(dateStr, DATE_FORMAT, true).isValid()) return false;
+  if (dayjs(dateStr).format(DATE_FORMAT) !== dateStr) return false;
+  return true;
 }
 
 function resolveAmount(data) {

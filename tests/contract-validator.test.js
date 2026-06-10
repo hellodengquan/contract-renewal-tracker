@@ -68,6 +68,16 @@ async function postFollowUp(body, description) {
   return { status: res.status, ok: res.ok, json, description };
 }
 
+async function putFollowUp(id, body, description) {
+  const res = await fetch(`${BASE_URL}/api/followups/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json();
+  return { status: res.status, ok: res.ok, json, description };
+}
+
 async function cleanup() {
   console.log('🧹 开始清理测试数据...');
   let deletedContracts = 0;
@@ -458,6 +468,212 @@ const CASES = [
       return {
         expect: { ok: true },
         actual: { ok: allPassed }
+      };
+    }
+  },
+  {
+    name: 'TC-23 非法值 POST: owner_email 以点号开头（.user@domain.com）',
+    run: async () => {
+      const body = makeContract({ owner_email: '.user@domain.com' });
+      const result = await postCreate(body, '邮箱本地部分以点号开头，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-24 非法值 POST: owner_email 以点号结尾（user.@domain.com）',
+    run: async () => {
+      const body = makeContract({ owner_email: 'user.@domain.com' });
+      const result = await postCreate(body, '邮箱本地部分以点号结尾，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-25 非法值 POST: owner_email 连续点号（user..name@domain.com）',
+    run: async () => {
+      const body = makeContract({ owner_email: 'user..name@domain.com' });
+      const result = await postCreate(body, '邮箱本地部分连续点号，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-26 正常值 POST: owner_email 含合法点号（first.last@domain.com）',
+    run: async () => {
+      const body = makeContract({ owner_email: 'first.last@domain.com' });
+      const result = await postCreate(body, '合法点号分隔邮箱，应通过');
+      return {
+        expect: { ok: true, status: 201 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-27 非法值 POST followUp: next_follow_date 格式错误',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, next_follow_date: '2025/06/30' });
+      const result = await postFollowUp(payload, '日期格式错误，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-28 非法值 POST followUp: next_follow_date = 2025-02-30（不存在日期）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, next_follow_date: '2025-02-30' });
+      const result = await postFollowUp(payload, '日期不存在，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-29 正常值 POST followUp: next_follow_date 合法 YYYY-MM-DD',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, next_follow_date: '2026-07-15' });
+      const result = await postFollowUp(payload, '日期合法，应通过');
+      return {
+        expect: { ok: true, status: 201 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-30 正常值 PUT followUp: 仅更新 action=visit（不强制全填）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const fu = await postFollowUp(
+        makeFollowUp({ contract_id: seed.json.data.id, action: 'call' }),
+        '先创建跟进'
+      );
+      if (!fu.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed: ' + (fu.json && fu.json.message) }, setupFailed: true };
+      }
+      const result = await putFollowUp(fu.json.data.id, { action: 'visit' }, 'PUT 仅更新 action');
+      return {
+        expect: { ok: true, status: 200, action: 'visit' },
+        actual: {
+          ok: result.ok,
+          status: result.status,
+          action: result.ok && result.json.data.action
+        }
+      };
+    }
+  },
+  {
+    name: 'TC-31 非法值 PUT followUp: action=非法值绕过枚举',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const fu = await postFollowUp(
+        makeFollowUp({ contract_id: seed.json.data.id, action: 'call' }),
+        '先创建跟进'
+      );
+      if (!fu.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const result = await putFollowUp(fu.json.data.id, { action: 'wechat' }, 'PUT action非法值');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-32 非法值 PUT followUp: next_follow_date 格式错误',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const fu = await postFollowUp(
+        makeFollowUp({ contract_id: seed.json.data.id, action: 'email' }),
+        '先创建跟进'
+      );
+      if (!fu.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const result = await putFollowUp(fu.json.data.id, { next_follow_date: '2025-13-45' }, 'PUT 日期非法');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-33 正常值 PUT followUp: 仅更新 result 字段（不传 action/owner_name）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const fu = await postFollowUp(
+        makeFollowUp({ contract_id: seed.json.data.id, action: 'visit' }),
+        '先创建跟进'
+      );
+      if (!fu.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const result = await putFollowUp(fu.json.data.id, { result: '客户确认续约' }, 'PUT 仅更新 result');
+      return {
+        expect: { ok: true, status: 200, newResult: '客户确认续约' },
+        actual: {
+          ok: result.ok,
+          status: result.status,
+          newResult: result.ok && result.json.data.result
+        }
+      };
+    }
+  },
+  {
+    name: 'TC-34 正常值 PUT followUp: 更新 next_follow_date 为合法日期',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建合同');
+      if (!seed.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const fu = await postFollowUp(
+        makeFollowUp({ contract_id: seed.json.data.id, action: 'meeting' }),
+        '先创建跟进'
+      );
+      if (!fu.ok) {
+        return { expect: { setup: 'ok' }, actual: { setup: 'failed' }, setupFailed: true };
+      }
+      const result = await putFollowUp(fu.json.data.id, { next_follow_date: '2026-08-20' }, 'PUT 合法日期');
+      return {
+        expect: { ok: true, status: 200, nextDate: '2026-08-20' },
+        actual: {
+          ok: result.ok,
+          status: result.status,
+          nextDate: result.ok && result.json.data.next_follow_date
+        }
       };
     }
   }

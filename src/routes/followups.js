@@ -7,7 +7,7 @@ router.get('/', validatePagination, controller.getFollowUpList);
 router.get('/pending', controller.getPendingFollowUps);
 router.get('/:id', controller.getFollowUpById);
 router.post('/', validateFollowUp, controller.createFollowUp);
-router.put('/:id', controller.updateFollowUp);
+router.put('/:id', validateFollowUp, controller.updateFollowUp);
 router.delete('/:id', controller.deleteFollowUp);
 
 module.exports = router;

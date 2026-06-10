@@ -4,7 +4,7 @@ const { AppError } = require('../middleware/errorHandler');
 const MAX_AMOUNT = 1e12;
 const MAX_STRING_LENGTH = 200;
 const DATE_FORMAT = 'YYYY-MM-DD';
-const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+const EMAIL_REGEX = /^[A-Za-z0-9_%+-]+(?:\.[A-Za-z0-9_%+-]+)*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const FOLLOWUP_ACTIONS = ['call', 'email', 'visit', 'meeting', 'other'];
 const FOLLOWUP_ACTION_LABELS = {
   call: '电话',
@@ -158,16 +158,78 @@ function validateContract(req, res, next) {
 
 function validateFollowUp(req, res, next) {
   try {
-    const data = req.body;
-    const required = ['contract_id', 'owner_name', 'action'];
-    const missing = required.filter(f => !data[f] && data[f] !== 0);
-    if (missing.length > 0) {
-      throw new AppError(`缺少必填字段: ${missing.join(', ')}`, 400);
+    const data = req.body || {};
+    const isCreate = req.method === 'POST';
+
+    if (isCreate) {
+      const required = [
+        { key: 'contract_id', label: '合同ID' },
+        { key: 'owner_name', label: '负责人姓名' },
+        { key: 'action', label: '跟进方式' }
+      ];
+      const missing = [];
+      required.forEach(({ key, label }) => {
+        const val = data[key];
+        if (val === undefined || val === null || val === '') {
+          missing.push(`${key}(${label})`);
+        }
+      });
+      if (missing.length > 0) {
+        throw new AppError(`缺少必填字段: ${missing.join(', ')}`, 400);
+      }
     }
-    if (typeof data.action !== 'string' || !FOLLOWUP_ACTIONS.includes(data.action)) {
-      const options = FOLLOWUP_ACTIONS.map(a => `${a}(${FOLLOWUP_ACTION_LABELS[a]})`).join(', ');
-      throw new AppError(`跟进方式(action)非法，仅允许: ${options}`, 400);
+
+    if (data.contract_id !== undefined && data.contract_id !== null && data.contract_id !== '') {
+      const cid = Number(data.contract_id);
+      if (isNaN(cid) || !Number.isInteger(cid) || cid <= 0) {
+        throw new AppError('合同ID(contract_id)必须为正整数', 400);
+      }
     }
+
+    if (data.reminder_id !== undefined && data.reminder_id !== null && data.reminder_id !== '') {
+      const rid = Number(data.reminder_id);
+      if (isNaN(rid) || !Number.isInteger(rid) || rid <= 0) {
+        throw new AppError('提醒ID(reminder_id)必须为正整数', 400);
+      }
+    }
+
+    if (data.owner_name !== undefined && data.owner_name !== null && data.owner_name !== '') {
+      if (typeof data.owner_name !== 'string') {
+        throw new AppError('负责人姓名(owner_name)必须为字符串', 400);
+      }
+      if (data.owner_name.length > MAX_STRING_LENGTH) {
+        throw new AppError(`负责人姓名(owner_name)长度不能超过 ${MAX_STRING_LENGTH} 字符`, 400);
+      }
+    }
+
+    if (data.action !== undefined && data.action !== null && data.action !== '') {
+      if (typeof data.action !== 'string' || !FOLLOWUP_ACTIONS.includes(data.action)) {
+        const options = FOLLOWUP_ACTIONS.map(a => `${a}(${FOLLOWUP_ACTION_LABELS[a]})`).join(', ');
+        throw new AppError(`跟进方式(action)非法，仅允许: ${options}`, 400);
+      }
+    }
+
+    if (data.result !== undefined && data.result !== null && data.result !== '') {
+      if (typeof data.result !== 'string') {
+        throw new AppError('跟进结果(result)必须为字符串', 400);
+      }
+      if (data.result.length > MAX_STRING_LENGTH) {
+        throw new AppError(`跟进结果(result)长度不能超过 ${MAX_STRING_LENGTH} 字符`, 400);
+      }
+    }
+
+    if (data.next_follow_date !== undefined && data.next_follow_date !== null && data.next_follow_date !== '') {
+      if (!isValidDateFormat(data.next_follow_date)) {
+        throw new AppError('下次跟进日期(next_follow_date)格式错误，必须为 YYYY-MM-DD 且是合法日期', 400);
+      }
+    }
+
+    if (data.follow_date !== undefined && data.follow_date !== null && data.follow_date !== '') {
+      if (!isValidDateFormat(data.follow_date)) {
+        throw new AppError('跟进日期(follow_date)格式错误，必须为 YYYY-MM-DD 且是合法日期', 400);
+      }
+    }
+
     next();
   } catch (err) {
     next(err);

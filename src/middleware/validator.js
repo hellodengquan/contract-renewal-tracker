@@ -4,6 +4,15 @@ const { AppError } = require('../middleware/errorHandler');
 const MAX_AMOUNT = 1e12;
 const MAX_STRING_LENGTH = 200;
 const DATE_FORMAT = 'YYYY-MM-DD';
+const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+const FOLLOWUP_ACTIONS = ['call', 'email', 'visit', 'meeting', 'other'];
+const FOLLOWUP_ACTION_LABELS = {
+  call: '电话',
+  email: '邮件',
+  visit: '上门拜访',
+  meeting: '会议',
+  other: '其他'
+};
 
 const STRING_FIELDS = [
   { key: 'contract_no', label: '合同编号' },
@@ -99,6 +108,13 @@ function validateContract(req, res, next) {
       }
     }
 
+    const emailVal = data.owner_email;
+    if (emailVal !== undefined && emailVal !== null && emailVal !== '') {
+      if (typeof emailVal !== 'string' || !EMAIL_REGEX.test(emailVal)) {
+        throw new AppError('负责人邮箱(owner_email)格式错误，需符合 local@domain.tld 结构', 400);
+      }
+    }
+
     for (const { key, label } of DATE_FIELDS) {
       const val = data[key];
       if (val !== undefined && val !== null && val !== '') {
@@ -144,9 +160,13 @@ function validateFollowUp(req, res, next) {
   try {
     const data = req.body;
     const required = ['contract_id', 'owner_name', 'action'];
-    const missing = required.filter(f => !data[f]);
+    const missing = required.filter(f => !data[f] && data[f] !== 0);
     if (missing.length > 0) {
       throw new AppError(`缺少必填字段: ${missing.join(', ')}`, 400);
+    }
+    if (typeof data.action !== 'string' || !FOLLOWUP_ACTIONS.includes(data.action)) {
+      const options = FOLLOWUP_ACTIONS.map(a => `${a}(${FOLLOWUP_ACTION_LABELS[a]})`).join(', ');
+      throw new AppError(`跟进方式(action)非法，仅允许: ${options}`, 400);
     }
     next();
   } catch (err) {

@@ -2,9 +2,12 @@ const dayjs = require('dayjs');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 
+const createdContractIds = new Set();
+const createdFollowUpIds = new Set();
+
 function makeContract(overrides = {}) {
   return {
-    contract_no: 'HT-TEST-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+    contract_no: 'HT-TEST-' + Math.random().toString(36).slice(2, 8).toUpperCase() + Math.floor(Date.now() % 10000),
     customer_name: '测试客户有限公司',
     contract_type: '年度服务',
     contract_amount: 100000,
@@ -18,6 +21,17 @@ function makeContract(overrides = {}) {
   };
 }
 
+function makeFollowUp(overrides = {}) {
+  return {
+    contract_id: 1,
+    owner_name: '测试负责人',
+    action: 'call',
+    result: '测试跟进结果',
+    next_follow_date: null,
+    ...overrides
+  };
+}
+
 async function postCreate(body, description) {
   const res = await fetch(`${BASE_URL}/api/contracts`, {
     method: 'POST',
@@ -25,6 +39,9 @@ async function postCreate(body, description) {
     body: JSON.stringify(body)
   });
   const json = await res.json();
+  if (res.ok && json && json.data && json.data.id) {
+    createdContractIds.add(json.data.id);
+  }
   return { status: res.status, ok: res.ok, json, description };
 }
 
@@ -36,6 +53,51 @@ async function putUpdate(id, body, description) {
   });
   const json = await res.json();
   return { status: res.status, ok: res.ok, json, description };
+}
+
+async function postFollowUp(body, description) {
+  const res = await fetch(`${BASE_URL}/api/followups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json();
+  if (res.ok && json && json.data && json.data.id) {
+    createdFollowUpIds.add(json.data.id);
+  }
+  return { status: res.status, ok: res.ok, json, description };
+}
+
+async function cleanup() {
+  console.log('🧹 开始清理测试数据...');
+  let deletedContracts = 0;
+  let deletedFollowUps = 0;
+  let errors = 0;
+
+  for (const id of createdFollowUpIds) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/followups/${id}`, { method: 'DELETE' });
+      if (res.ok) deletedFollowUps++;
+      else errors++;
+    } catch (e) {
+      errors++;
+    }
+  }
+
+  for (const id of createdContractIds) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/contracts/${id}`, { method: 'DELETE' });
+      if (res.ok) deletedContracts++;
+      else errors++;
+    } catch (e) {
+      errors++;
+    }
+  }
+
+  console.log(`   📋 删除合同: ${deletedContracts} 条`);
+  console.log(`   📝 删除跟进: ${deletedFollowUps} 条`);
+  if (errors > 0) console.log(`   ⚠️  失败: ${errors} 条`);
+  console.log('   ✅ 清理完成\n');
 }
 
 const CASES = [
@@ -229,9 +291,10 @@ const CASES = [
   {
     name: 'TC-13 非法值 POST: owner_email = 201 字符',
     run: async () => {
-      const longEmail = 'a@'.repeat(50) + 'x.com';
-      const padded = longEmail.padEnd(201, 'z');
-      const body = makeContract({ owner_email: padded.slice(0, 201) });
+      const local = 'a'.repeat(90);
+      const domain = 'b'.repeat(90);
+      const longEmail = `${local}@${domain}.com`.padEnd(201, 'z').slice(0, 201);
+      const body = makeContract({ owner_email: longEmail });
       const result = await postCreate(body, '邮箱超长，应失败');
       return {
         expect: { ok: false, status: 400 },
@@ -254,6 +317,147 @@ const CASES = [
           status: result.status,
           messageContains: result.json && result.json.message && /开始|结束/.test(result.json.message)
         }
+      };
+    }
+  },
+  {
+    name: 'TC-15 正常值 POST: owner_email 合法格式（user@domain.com）',
+    run: async () => {
+      const body = makeContract({ owner_email: 'valid.user+tag@example-domain.co.cn' });
+      const result = await postCreate(body, '合法邮箱格式，应通过');
+      return {
+        expect: { ok: true, status: 201 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-16 非法值 POST: owner_email 缺少 @ 符号',
+    run: async () => {
+      const body = makeContract({ owner_email: 'notanemail.com' });
+      const result = await postCreate(body, '邮箱缺少@，应失败');
+      return {
+        expect: { ok: false, status: 400, messageContains: '邮箱格式' },
+        actual: {
+          ok: result.ok,
+          status: result.status,
+          messageContains: result.json && result.json.message && /邮箱|email|格式/i.test(result.json.message)
+        }
+      };
+    }
+  },
+  {
+    name: 'TC-17 非法值 POST: owner_email 缺少顶级域（local@domain）',
+    run: async () => {
+      const body = makeContract({ owner_email: 'user@nodotdomain' });
+      const result = await postCreate(body, '邮箱缺少顶级域，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-18 正常值 POST followUp: action = call（枚举合法值）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同用于跟进测试');
+      if (!seed.ok) {
+        return {
+          expect: { setup: 'ok' },
+          actual: { setup: 'failed: ' + (seed.json && seed.json.message) },
+          setupFailed: true
+        };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, action: 'call' });
+      const result = await postFollowUp(payload, 'action=call，应通过');
+      return {
+        expect: { ok: true, status: 201 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-19 正常值 POST followUp: action = meeting（枚举合法值）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同用于跟进测试');
+      if (!seed.ok) {
+        return {
+          expect: { setup: 'ok' },
+          actual: { setup: 'failed: ' + (seed.json && seed.json.message) },
+          setupFailed: true
+        };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, action: 'meeting' });
+      const result = await postFollowUp(payload, 'action=meeting，应通过');
+      return {
+        expect: { ok: true, status: 201 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-20 非法值 POST followUp: action = 任意字符串（不在枚举中）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同用于跟进测试');
+      if (!seed.ok) {
+        return {
+          expect: { setup: 'ok' },
+          actual: { setup: 'failed: ' + (seed.json && seed.json.message) },
+          setupFailed: true
+        };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, action: 'wechat沟通' });
+      const result = await postFollowUp(payload, 'action值不在枚举中，应失败');
+      return {
+        expect: { ok: false, status: 400, messageContains: '跟进方式|action|仅允许' },
+        actual: {
+          ok: result.ok,
+          status: result.status,
+          messageContains: result.json && result.json.message && /跟进方式|action|允许|call|email|visit|meeting|other/i.test(result.json.message)
+        }
+      };
+    }
+  },
+  {
+    name: 'TC-21 非法值 POST followUp: action = 空字符串（非空校验+枚举失败）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同用于跟进测试');
+      if (!seed.ok) {
+        return {
+          expect: { setup: 'ok' },
+          actual: { setup: 'failed: ' + (seed.json && seed.json.message) },
+          setupFailed: true
+        };
+      }
+      const payload = makeFollowUp({ contract_id: seed.json.data.id, action: '' });
+      const result = await postFollowUp(payload, 'action为空，应失败');
+      return {
+        expect: { ok: false, status: 400 },
+        actual: { ok: result.ok, status: result.status }
+      };
+    }
+  },
+  {
+    name: 'TC-22 正常值 POST followUp: 5 个枚举值遍历（other）',
+    run: async () => {
+      const seed = await postCreate(makeContract(), '先创建一个合同用于跟进测试');
+      if (!seed.ok) {
+        return {
+          expect: { setup: 'ok' },
+          actual: { setup: 'failed: ' + (seed.json && seed.json.message) },
+          setupFailed: true
+        };
+      }
+      const actions = ['call', 'email', 'visit', 'meeting', 'other'];
+      let allPassed = true;
+      for (const act of actions) {
+        const payload = makeFollowUp({ contract_id: seed.json.data.id, action: act });
+        const r = await postFollowUp(payload, `action=${act}`);
+        if (!r.ok) { allPassed = false; break; }
+      }
+      return {
+        expect: { ok: true },
+        actual: { ok: allPassed }
       };
     }
   }
@@ -290,37 +494,42 @@ function checkEqual(expect, actual, path = '') {
   let failCount = 0;
   let skipCount = 0;
   const details = [];
+  const START = Date.now();
 
-  for (let i = 0; i < CASES.length; i++) {
-    const tc = CASES[i];
-    console.log(`[${i + 1}/${CASES.length}] ${tc.name}`);
-    try {
-      const out = await tc.run();
-      if (out.setupFailed) {
-        console.log(`   ⏭️  SKIP (前置条件失败: ${out.actual.setup})`);
-        skipCount++;
-        details.push({ name: tc.name, result: 'skip', reason: out.actual.setup });
-        continue;
-      }
-      const errors = checkEqual(out.expect, out.actual);
-      if (errors.length === 0) {
-        console.log(`   ✅ PASS`);
-        passCount++;
-        details.push({ name: tc.name, result: 'pass' });
-      } else {
-        console.log(`   ❌ FAIL`);
-        errors.forEach(e => console.log(`      - ${e}`));
-        console.log(`      expect=${JSON.stringify(out.expect)}`);
-        console.log(`      actual=${JSON.stringify(out.actual)}`);
+  try {
+    for (let i = 0; i < CASES.length; i++) {
+      const tc = CASES[i];
+      console.log(`[${i + 1}/${CASES.length}] ${tc.name}`);
+      try {
+        const out = await tc.run();
+        if (out.setupFailed) {
+          console.log(`   ⏭️  SKIP (前置条件失败: ${out.actual.setup})`);
+          skipCount++;
+          details.push({ name: tc.name, result: 'skip', reason: out.actual.setup });
+          continue;
+        }
+        const errors = checkEqual(out.expect, out.actual);
+        if (errors.length === 0) {
+          console.log(`   ✅ PASS`);
+          passCount++;
+          details.push({ name: tc.name, result: 'pass' });
+        } else {
+          console.log(`   ❌ FAIL`);
+          errors.forEach(e => console.log(`      - ${e}`));
+          console.log(`      expect=${JSON.stringify(out.expect)}`);
+          console.log(`      actual=${JSON.stringify(out.actual)}`);
+          failCount++;
+          details.push({ name: tc.name, result: 'fail', errors });
+        }
+      } catch (err) {
+        console.log(`   ❌ ERROR: ${err.message}`);
         failCount++;
-        details.push({ name: tc.name, result: 'fail', errors });
+        details.push({ name: tc.name, result: 'error', error: err.message });
       }
-    } catch (err) {
-      console.log(`   ❌ ERROR: ${err.message}`);
-      failCount++;
-      details.push({ name: tc.name, result: 'error', error: err.message });
+      console.log('');
     }
-    console.log('');
+  } finally {
+    await cleanup();
   }
 
   console.log('========================================');
@@ -329,7 +538,11 @@ function checkEqual(expect, actual, path = '') {
   console.log(`  ❌ 失败: ${failCount}`);
   console.log(`  ⏭️  跳过: ${skipCount}`);
   console.log(`  📊 通过率: ${((passCount / CASES.length) * 100).toFixed(1)}%`);
+  console.log(`  ⏱️  耗时: ${((Date.now() - START) / 1000).toFixed(2)}s`);
   console.log('========================================\n');
 
   process.exit(failCount > 0 ? 1 : 0);
-})();
+})().catch(err => {
+  console.error('测试运行异常:', err);
+  cleanup().then(() => process.exit(2)).catch(() => process.exit(2));
+});

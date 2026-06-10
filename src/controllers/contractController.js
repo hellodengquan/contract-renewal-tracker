@@ -31,6 +31,19 @@ function enrichContract(contract) {
   };
 }
 
+function normalizeAmount(data) {
+  if (!data) return;
+  if (data.contract_amount !== undefined && data.amount === undefined) {
+    data.amount = data.contract_amount;
+  }
+  if (typeof data.amount === 'string') {
+    const num = Number(data.amount);
+    if (!isNaN(num) && Number.isFinite(num)) {
+      data.amount = num;
+    }
+  }
+}
+
 async function generateRemindersForContract(contractId, endDate) {
   const daysBeforeList = [90, 60, 30, 14, 7];
   const deleteStmt = db.prepare('DELETE FROM renewal_reminders WHERE contract_id = ?');
@@ -193,6 +206,7 @@ const getContractById = asyncHandler(async (req, res) => {
 
 const createContract = asyncHandler(async (req, res) => {
   const data = req.body;
+  normalizeAmount(data);
 
   const existing = await db.get('SELECT id FROM contracts WHERE contract_no = ?', [data.contract_no]);
   if (existing) {
@@ -238,6 +252,7 @@ const createContract = asyncHandler(async (req, res) => {
 const updateContract = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const data = req.body;
+  normalizeAmount(data);
 
   const existing = await db.get('SELECT * FROM contracts WHERE id = ?', [id]);
   if (!existing) {

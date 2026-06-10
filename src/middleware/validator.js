@@ -1,73 +1,187 @@
-const { badRequest } = require('../middleware/errorHandler');
+const dayjs = require('dayjs');
+const { AppError } = require('../middleware/errorHandler');
+
+const MAX_AMOUNT = 1e12;
+const MAX_STRING_LENGTH = 200;
+const DATE_FORMAT = 'YYYY-MM-DD';
+
+const STRING_FIELDS = [
+  { key: 'contract_no', label: '合同编号' },
+  { key: 'customer_name', label: '客户名称' },
+  { key: 'contract_type', label: '合同类型' },
+  { key: 'owner_name', label: '负责人姓名' },
+  { key: 'owner_email', label: '负责人邮箱' },
+  { key: 'owner_phone', label: '负责人电话' },
+  { key: 'description', label: '合同描述' }
+];
+
+const DATE_FIELDS = [
+  { key: 'sign_date', label: '签署日期' },
+  { key: 'start_date', label: '开始日期' },
+  { key: 'end_date', label: '结束日期' }
+];
+
+function isValidDateFormat(dateStr) {
+  if (typeof dateStr !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  return dayjs(dateStr, DATE_FORMAT, true).isValid();
+}
+
+function resolveAmount(data) {
+  if (data.contract_amount !== undefined && data.contract_amount !== null) {
+    return data.contract_amount;
+  }
+  return data.amount;
+}
 
 function validateContract(req, res, next) {
-  const data = req.method === 'POST' ? req.body : (req.body || {});
-  const isCreate = req.method === 'POST';
+  try {
+    const data = req.body || {};
+    const isCreate = req.method === 'POST';
 
-  if (isCreate) {
-    const required = ['contract_no', 'customer_name', 'contract_type', 'amount', 'sign_date', 'start_date', 'end_date', 'owner_name'];
-    const missing = required.filter(f => !data[f] && data[f] !== 0);
-    if (missing.length > 0) {
-      return badRequest(`缺少必填字段: ${missing.join(', ')}`);
-    }
-  }
-
-  if (data.amount !== undefined && (typeof data.amount !== 'number' || data.amount < 0)) {
-    return badRequest('合同金额必须为非负数字');
-  }
-
-  const dateFields = ['sign_date', 'start_date', 'end_date'];
-  for (const field of dateFields) {
-    if (data[field]) {
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(data[field])) {
-        return badRequest(`日期格式错误 (${field})，请使用 YYYY-MM-DD 格式`);
+    const amount = resolveAmount(data);
+    if (isCreate) {
+      const required = [
+        { key: 'contract_no', label: '合同编号' },
+        { key: 'customer_name', label: '客户名称' },
+        { key: 'contract_type', label: '合同类型' },
+        { key: 'sign_date', label: '签署日期' },
+        { key: 'start_date', label: '开始日期' },
+        { key: 'end_date', label: '结束日期' },
+        { key: 'owner_name', label: '负责人姓名' }
+      ];
+      const missingFields = [];
+      required.forEach(({ key, label }) => {
+        const val = data[key];
+        if (val === undefined || val === null || val === '') {
+          missingFields.push(`${key}(${label})`);
+        }
+      });
+      if (amount === undefined || amount === null || amount === '') {
+        missingFields.push('contract_amount/amount(合同金额)');
+      }
+      if (missingFields.length > 0) {
+        throw new AppError(`缺少必填字段: ${missingFields.join(', ')}`, 400);
       }
     }
-  }
 
-  if (data.start_date && data.end_date) {
-    if (new Date(data.start_date) > new Date(data.end_date)) {
-      return badRequest('合同开始日期不能晚于结束日期');
+    if (amount !== undefined && amount !== null && amount !== '') {
+      if (typeof amount !== 'number' && typeof amount !== 'string') {
+        throw new AppError('合同金额类型错误，必须为数字', 400);
+      }
+      const num = Number(amount);
+      if (isNaN(num)) {
+        throw new AppError('合同金额必须是有效数字', 400);
+      }
+      if (!Number.isFinite(num)) {
+        throw new AppError('合同金额必须是有限数字', 400);
+      }
+      if (num <= 0) {
+        throw new AppError('合同金额必须为正数（不能为 0 或负数）', 400);
+      }
+      if (num > MAX_AMOUNT) {
+        throw new AppError(`合同金额不能超过 ${MAX_AMOUNT.toExponential()}`, 400);
+      }
+      if (isCreate || data.amount !== undefined || data.contract_amount !== undefined) {
+        req.body.amount = num;
+      }
     }
-  }
 
-  if (data.status && !['active', 'expired', 'terminated', 'renewed'].includes(data.status)) {
-    return badRequest('合同状态必须是: active, expired, terminated, renewed');
-  }
+    for (const { key, label } of STRING_FIELDS) {
+      const val = data[key];
+      if (val !== undefined && val !== null && val !== '') {
+        if (typeof val !== 'string') {
+          throw new AppError(`${label}(${key})必须为字符串`, 400);
+        }
+        if (val.length > MAX_STRING_LENGTH) {
+          throw new AppError(`${label}(${key})长度不能超过 ${MAX_STRING_LENGTH} 字符`, 400);
+        }
+      }
+    }
 
-  next();
+    for (const { key, label } of DATE_FIELDS) {
+      const val = data[key];
+      if (val !== undefined && val !== null && val !== '') {
+        if (!isValidDateFormat(val)) {
+          throw new AppError(`${label}(${key})格式错误，必须为 YYYY-MM-DD 且是合法日期`, 400);
+        }
+      }
+    }
+
+    const signDate = data.sign_date;
+    const endDate = data.end_date;
+    if (signDate && endDate) {
+      if (dayjs(signDate).isAfter(dayjs(endDate), 'day')) {
+        throw new AppError('签署日期不得晚于合同到期日', 400);
+      }
+    }
+
+    const startDate = data.start_date;
+    if (startDate && endDate) {
+      if (dayjs(startDate).isAfter(dayjs(endDate), 'day')) {
+        throw new AppError('合同开始日期不能晚于结束日期', 400);
+      }
+    }
+    if (signDate && startDate) {
+      if (dayjs(signDate).isAfter(dayjs(startDate), 'day')) {
+        throw new AppError('签署日期不得晚于合同开始日期', 400);
+      }
+    }
+
+    if (data.status !== undefined && data.status !== null && data.status !== '') {
+      if (!['active', 'expired', 'terminated', 'renewed'].includes(data.status)) {
+        throw new AppError('合同状态必须是: active, expired, terminated, renewed', 400);
+      }
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 function validateFollowUp(req, res, next) {
-  const data = req.body;
-  const required = ['contract_id', 'owner_name', 'action'];
-  const missing = required.filter(f => !data[f]);
-  if (missing.length > 0) {
-    return badRequest(`缺少必填字段: ${missing.join(', ')}`);
+  try {
+    const data = req.body;
+    const required = ['contract_id', 'owner_name', 'action'];
+    const missing = required.filter(f => !data[f]);
+    if (missing.length > 0) {
+      throw new AppError(`缺少必填字段: ${missing.join(', ')}`, 400);
+    }
+    next();
+  } catch (err) {
+    next(err);
   }
-  next();
 }
 
 function validatePagination(req, res, next) {
-  const page = parseInt(req.query.page) || 1;
-  const pageSize = parseInt(req.query.page_size) || 20;
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.page_size) || 20;
 
-  if (page < 1) return badRequest('页码必须大于0');
-  if (pageSize < 1 || pageSize > 100) return badRequest('每页数量必须在1-100之间');
+    if (page < 1) throw new AppError('页码必须大于0', 400);
+    if (pageSize < 1 || pageSize > 100) throw new AppError('每页数量必须在1-100之间', 400);
 
-  req.pagination = {
-    page,
-    pageSize,
-    offset: (page - 1) * pageSize,
-    limit: pageSize
-  };
+    req.pagination = {
+      page,
+      pageSize,
+      offset: (page - 1) * pageSize,
+      limit: pageSize
+    };
 
-  next();
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 module.exports = {
   validateContract,
   validateFollowUp,
-  validatePagination
+  validatePagination,
+  _test: {
+    isValidDateFormat,
+    MAX_AMOUNT,
+    MAX_STRING_LENGTH
+  }
 };

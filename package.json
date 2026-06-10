@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "init-db": "node db/init.js",
-    "seed": "node db/seed.js"
+    "seed": "node db/seed.js",
+    "test": "node tests/contract-validator.test.js"
   },
   "keywords": [
     "contract",
@@ -19,11 +20,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "sqlite3": "^5.1.7",
     "cors": "^2.8.5",
+    "dayjs": "^1.11.21",
     "dotenv": "^16.4.1",
-    "morgan": "^1.10.0"
+    "express": "^4.18.2",
+    "morgan": "^1.10.0",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

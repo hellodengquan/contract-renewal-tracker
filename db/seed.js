@@ -1,16 +1,19 @@
 require('dotenv').config();
+const dayjs = require('dayjs');
 const { run, prepare, close } = require('./config');
 
-const today = new Date();
+const today = dayjs();
 
 function formatDate(d) {
-  return d.toISOString().split('T')[0];
+  return dayjs(d).format('YYYY-MM-DD');
 }
 
 function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return formatDate(d);
+  return dayjs(date).add(days, 'day').format('YYYY-MM-DD');
+}
+
+function addMonths(date, months) {
+  return dayjs(date).add(months, 'month').format('YYYY-MM-DD');
 }
 
 const contracts = [
@@ -122,13 +125,11 @@ async function generateRemindersForContract(contractId, endDate) {
   `);
   await run('DELETE FROM renewal_reminders WHERE contract_id = ?', [contractId]);
 
-  const end = new Date(endDate);
-  const todayStr = formatDate(new Date());
+  const end = dayjs(endDate);
+  const todayStr = formatDate(today);
 
   for (const days of daysBeforeList) {
-    const remindDate = new Date(end);
-    remindDate.setDate(remindDate.getDate() - days);
-    const remindDateStr = formatDate(remindDate);
+    const remindDateStr = end.subtract(days, 'day').format('YYYY-MM-DD');
 
     let status = 'pending';
     if (remindDateStr < todayStr) {
